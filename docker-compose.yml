@@ -1,0 +1,104 @@
+services:
+  # ─── App ──────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fotnob-api
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+      DB_WRITER_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+      DB_READER_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: local_dev_access_secret_min_32_chars_xxx
+      JWT_REFRESH_SECRET: local_dev_refresh_secret_min_32_chars_xxx
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 30d
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-placeholder}
+      RAPIDAPI_HOST: api-football-v1.p.rapidapi.com
+      ALLOWED_ORIGINS: http://localhost:4200,http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: pnpm start:dev
+    restart: unless-stopped
+
+  # ─── PostgreSQL ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: fotnob-postgres
+    environment:
+      POSTGRES_USER: fotnob
+      POSTGRES_PASSWORD: fotnob
+      POSTGRES_DB: fotnob
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U fotnob']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ─── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: fotnob-redis
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ─── Redis Commander (dev UI) ─────────────────────────────────────────────
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: fotnob-redis-ui
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - '8081:8081'
+    depends_on:
+      - redis
+    profiles:
+      - tools
+
+  # ─── Prisma Studio (dev DB GUI) ───────────────────────────────────────────
+  prisma-studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fotnob-prisma-studio
+    command: node_modules/.bin/prisma studio --port 5555 --browser none
+    environment:
+      DATABASE_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+      DB_WRITER_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+      DB_READER_URL: postgresql://fotnob:fotnob@postgres:5432/fotnob
+    ports:
+      - '5555:5555'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - tools
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,360 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── LEAGUES & COMPETITIONS ────────────────────────────────────────────────
+
+model League {
+  id          String   @id @default(cuid())
+  externalId  String   @unique
+  name        String
+  shortName   String
+  country     String
+  logoUrl     String?
+  tier        Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  seasons     Season[]
+  newsFeed    NewsFeed?
+
+  @@index([country])
+  @@index([isActive])
+}
+
+model Season {
+  id          String   @id @default(cuid())
+  leagueId    String
+  name        String
+  startDate   DateTime
+  endDate     DateTime
+  isCurrent   Boolean  @default(false)
+
+  league      League   @relation(fields: [leagueId], references: [id])
+  matches     Match[]
+  standings   Standing[]
+
+  @@index([leagueId, isCurrent])
+}
+
+// ─── TEAMS ─────────────────────────────────────────────────────────────────
+
+model Team {
+  id          String   @id @default(cuid())
+  externalId  String   @unique
+  name        String
+  shortName   String
+  logoUrl     String?
+  countryCode String
+  founded     Int?
+  stadium     String?
+  website     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  homeMatches     Match[]              @relation("HomeTeam")
+  awayMatches     Match[]              @relation("AwayTeam")
+  players         Player[]
+  standings       Standing[]
+  userFavourites  UserFavouriteTeam[]
+
+  @@index([countryCode])
+}
+
+// ─── PLAYERS ───────────────────────────────────────────────────────────────
+
+model Player {
+  id              String    @id @default(cuid())
+  externalId      String    @unique
+  name            String
+  dateOfBirth     DateTime?
+  nationality     String?
+  position        String?
+  jerseyNumber    Int?
+  photoUrl        String?
+  popularityScore Int       @default(0)
+  teamId          String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  team            Team?     @relation(fields: [teamId], references: [id])
+  matchEvents     MatchEvent[]
+  ratings         PlayerMatchRating[]
+  userFavourites  UserFavouritePlayer[]
+
+  @@index([teamId])
+  @@index([popularityScore])
+}
+
+// ─── MATCHES ───────────────────────────────────────────────────────────────
+
+model Match {
+  id           String      @id @default(cuid())
+  externalId   String      @unique
+  seasonId     String
+  homeTeamId   String
+  awayTeamId   String
+  homeScore    Int         @default(0)
+  awayScore    Int         @default(0)
+  status       MatchStatus @default(SCHEDULED)
+  minute       Int?
+  kickoffTime  DateTime
+  venue        String?
+  round        String?
+  attendance   Int?
+  refereeId    String?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  season        Season      @relation(fields: [seasonId], references: [id])
+  homeTeam      Team        @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam      Team        @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  events        MatchEvent[]
+  stats         MatchStats?
+  playerRatings PlayerMatchRating[]
+
+  @@index([kickoffTime])
+  @@index([status])
+  @@index([homeTeamId])
+  @@index([awayTeamId])
+  @@index([seasonId, status])
+}
+
+enum MatchStatus {
+  SCHEDULED
+  LIVE
+  HALFTIME
+  FINISHED
+  POSTPONED
+  CANCELLED
+}
+
+model MatchEvent {
+  id              String    @id @default(cuid())
+  externalId      String?   @unique
+  matchId         String
+  type            EventType
+  minute          Int
+  addedTime       Int?
+  teamId          String
+  playerId        String
+  assistPlayerId  String?
+  detail          String?
+  homeScoreAfter  Int?
+  awayScoreAfter  Int?
+  createdAt       DateTime  @default(now())
+
+  match           Match     @relation(fields: [matchId], references: [id])
+  player          Player    @relation(fields: [playerId], references: [id])
+
+  @@index([matchId])
+  @@index([playerId])
+  @@index([matchId, minute])
+}
+
+enum EventType {
+  GOAL
+  OWN_GOAL
+  YELLOW_CARD
+  SECOND_YELLOW
+  RED_CARD
+  SUBSTITUTION
+  PENALTY_SCORED
+  PENALTY_MISSED
+  VAR_REVIEW
+}
+
+model MatchStats {
+  id                  String  @id @default(cuid())
+  matchId             String  @unique
+  possessionHome      Float?
+  possessionAway      Float?
+  shotsHome           Int?
+  shotsAway           Int?
+  shotsOnTargetHome   Int?
+  shotsOnTargetAway   Int?
+  xGHome              Float?
+  xGAway              Float?
+  cornersHome         Int?
+  cornersAway         Int?
+  foulsHome           Int?
+  foulsAway           Int?
+  passAccuracyHome    Float?
+  passAccuracyAway    Float?
+  momentumData        Json?
+
+  match               Match   @relation(fields: [matchId], references: [id])
+}
+
+model PlayerMatchRating {
+  id        String  @id @default(cuid())
+  playerId  String
+  matchId   String
+  rating    Float
+  minutes   Int
+  goals     Int     @default(0)
+  assists   Int     @default(0)
+
+  player    Player  @relation(fields: [playerId], references: [id])
+  match     Match   @relation(fields: [matchId], references: [id])
+
+  @@unique([playerId, matchId])
+  @@index([playerId])
+  @@index([matchId])
+}
+
+// ─── STANDINGS ─────────────────────────────────────────────────────────────
+
+model Standing {
+  id           String  @id @default(cuid())
+  seasonId     String
+  teamId       String
+  position     Int
+  played       Int     @default(0)
+  won          Int     @default(0)
+  drawn        Int     @default(0)
+  lost         Int     @default(0)
+  goalsFor     Int     @default(0)
+  goalsAgainst Int     @default(0)
+  points       Int     @default(0)
+  form         String?
+  updatedAt    DateTime @updatedAt
+
+  season       Season  @relation(fields: [seasonId], references: [id])
+  team         Team    @relation(fields: [teamId], references: [id])
+
+  @@unique([seasonId, teamId])
+  @@index([seasonId, position])
+}
+
+// ─── USERS ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  displayName  String?
+  avatarUrl    String?
+  locale       String    @default("en")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  refreshTokens       RefreshToken[]
+  favouriteTeams      UserFavouriteTeam[]
+  favouriteLeagues    UserFavouriteLeague[]
+  favouritePlayers    UserFavouritePlayer[]
+  notificationPrefs   NotificationPrefs?
+  fcmTokens           FcmToken[]
+}
+
+model UserFavouriteTeam {
+  userId    String
+  teamId    String
+  addedAt   DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  team      Team     @relation(fields: [teamId], references: [id])
+  @@id([userId, teamId])
+}
+
+model UserFavouriteLeague {
+  userId    String
+  leagueId  String
+  addedAt   DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  @@id([userId, leagueId])
+}
+
+model UserFavouritePlayer {
+  userId    String
+  playerId  String
+  addedAt   DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  player    Player   @relation(fields: [playerId], references: [id])
+  @@id([userId, playerId])
+}
+
+model NotificationPrefs {
+  userId          String  @id
+  goals           Boolean @default(true)
+  kickoff         Boolean @default(true)
+  lineups         Boolean @default(false)
+  finalWhistle    Boolean @default(true)
+  news            Boolean @default(false)
+  user            User    @relation(fields: [userId], references: [id])
+}
+
+model FcmToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  platform  String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  @@index([userId])
+}
+
+model RefreshToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id])
+  @@index([userId])
+}
+
+// ─── NEWS ──────────────────────────────────────────────────────────────────
+
+model Article {
+  id          String        @id @default(cuid())
+  title       String
+  sourceUrl   String        @unique
+  imageUrl    String?
+  rawContent  String        @db.Text
+  aiSummary   String?       @db.Text
+  teamId      String?
+  leagueId    String?
+  publishedAt DateTime
+  status      ArticleStatus @default(PENDING_SUMMARY)
+  createdAt   DateTime      @default(now())
+
+  @@index([teamId, publishedAt])
+  @@index([leagueId, publishedAt])
+  @@index([publishedAt])
+}
+
+enum ArticleStatus {
+  PENDING_SUMMARY
+  SUMMARISED
+  FAILED
+}
+
+model NewsFeed {
+  id        String   @id @default(cuid())
+  leagueId  String?  @unique
+  teamId    String?
+  url       String
+  active    Boolean  @default(true)
+  league    League?  @relation(fields: [leagueId], references: [id])
+}
+
+// ─── EXTERNAL ID MAPPING ───────────────────────────────────────────────────
+
+model ExternalIdMap {
+  internalId   String
+  entityType   String
+  provider     String
+  externalId   String
+
+  @@id([provider, entityType, externalId])
+  @@index([internalId])
+}
