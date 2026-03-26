@@ -1,53 +1,25 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, Interval } from '@nestjs/schedule';
-import type { MatchStatus, EventType } from '@prisma/client';
+import type { MatchStatus } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { FootballDataService } from '../providers/football-data/football-data.service.js';
-import type {
-  ApiFootballFixture,
-  ApiFootballTeam,
-  ApiFootballStanding,
-  ApiFootballFixtureStatistic,
-  ApiFootballFixturePlayer,
-} from '../providers/football-data/football-data.types.js';
+import type { FDMatch, FDStandingEntry } from '../providers/football-data/football-data.types.js';
+import type { LeagueCode } from '../providers/football-data/league-codes.js';
 
 const STATUS_MAP: Record<string, MatchStatus> = {
-  NS: 'SCHEDULED',
-  '1H': 'LIVE',
-  HT: 'HALFTIME',
-  '2H': 'LIVE',
-  ET: 'LIVE',
-  BT: 'LIVE',
-  P: 'LIVE',
-  FT: 'FINISHED',
-  AET: 'FINISHED',
-  PEN: 'FINISHED',
-  PST: 'POSTPONED',
-  CANC: 'CANCELLED',
-  SUSP: 'POSTPONED',
-  ABD: 'CANCELLED',
-  AWD: 'FINISHED',
-  WO: 'FINISHED',
+  SCHEDULED:  'SCHEDULED',
+  TIMED:      'SCHEDULED',
+  IN_PLAY:    'LIVE',
+  PAUSED:     'HALFTIME',
+  HALFTIME:   'HALFTIME',
+  FINISHED:   'FINISHED',
+  AWARDED:    'FINISHED',
+  POSTPONED:  'POSTPONED',
+  SUSPENDED:  'POSTPONED',
+  CANCELLED:  'CANCELLED',
 };
-
-function mapEventType(type: string, detail: string): EventType | null {
-  if (type === 'Goal') {
-    if (detail === 'Own Goal') return 'OWN_GOAL';
-    if (detail === 'Missed Penalty') return 'PENALTY_MISSED';
-    if (detail === 'Penalty') return 'PENALTY_SCORED';
-    return 'GOAL';
-  }
-  if (type === 'Card') {
-    if (detail === 'Yellow Card') return 'YELLOW_CARD';
-    if (detail === 'Red Card') return 'RED_CARD';
-    return null;
-  }
-  if (type === 'subst') return 'SUBSTITUTION';
-  if (type === 'Var') return 'VAR_REVIEW';
-  return null;
-}
 
 @Injectable()
 export class IngestService {
@@ -73,13 +45,13 @@ export class IngestService {
   }
 
   async ingestFixturesForDate(date: string): Promise<void> {
-    const fixtures = await this.footballData.getFixturesByDate(date);
-    this.logger.debug(`Got ${fixtures.length} fixtures for ${date}`);
-    for (const fixture of fixtures) {
+    const matches = await this.footballData.getMatchesByDate(date);
+    this.logger.debug(`Got ${matches.length} matches for ${date}`);
+    for (const match of matches) {
       try {
-        await this.upsertFixture(fixture);
+        await this.upsertMatch(match);
       } catch (err) {
-        this.logger.error(`Failed to upsert fixture ${fixture.fixture.id}`, err);
+        this.logger.error(`Failed to upsert match ${match.id}`, err);
       }
     }
   }
@@ -88,24 +60,26 @@ export class IngestService {
 
   @Interval(60_000)
   async syncLiveMatches(): Promise<void> {
-    const liveFixtures = await this.footballData.getLiveFixtures();
-    if (!liveFixtures.length) return;
+    const liveMatches = await this.footballData.getLiveMatches();
+    if (!liveMatches.length) return;
 
-    this.logger.debug(`Polling events for ${liveFixtures.length} live matches`);
-    for (const fixture of liveFixtures) {
+    this.logger.debug(`Polling ${liveMatches.length} live matches`);
+    for (const match of liveMatches) {
       try {
-        const match = await this.upsertFixture(fixture);
-        await this.syncMatchEvents(
-          fixture.fixture.id,
-          match.id,
-          match.homeScore,
-          match.awayScore,
-          match.status,
-          String(fixture.teams.home.id),
-          String(fixture.teams.away.id),
-        );
+        const dbMatch = await this.upsertMatch(match);
+
+        await this.redis.publish('match-events', {
+          matchId: dbMatch.id,
+          homeScore: dbMatch.homeScore,
+          awayScore: dbMatch.awayScore,
+          status: dbMatch.status,
+        });
+
+        if (dbMatch.status === 'FINISHED') {
+          await this.redis.publish('match-finished', { matchId: dbMatch.id });
+        }
       } catch (err) {
-        this.logger.error(`Failed to sync live fixture ${fixture.fixture.id}`, err);
+        this.logger.error(`Failed to sync live match ${match.id}`, err);
       }
     }
   }
@@ -123,19 +97,13 @@ export class IngestService {
       const season = league.seasons[0];
       if (!season) continue;
       try {
-        const year = parseInt(season.name, 10);
-        const standingsGroups = await this.footballData.getStandings(
-          parseInt(league.externalId, 10),
-          year,
-        );
-        for (const group of standingsGroups) {
-          for (const entry of group) {
-            await this.upsertStanding(entry, season.id).catch((err) =>
-              this.logger.error(`Failed to upsert standing for team ${entry.team.id}`, err),
-            );
-          }
+        const table = await this.footballData.getStandings(league.externalId as LeagueCode);
+        for (const entry of table) {
+          await this.upsertStanding(entry, season.id).catch((err) =>
+            this.logger.error(`Failed to upsert standing for team ${entry.team.id}`, err),
+          );
         }
-        this.logger.debug(`Synced standings for league ${league.name} (${year})`);
+        this.logger.debug(`Synced standings for league ${league.name}`);
       } catch (err) {
         this.logger.error(`Failed to sync standings for league ${league.id}`, err);
       }
@@ -144,268 +112,97 @@ export class IngestService {
 
   // ─── Private helpers ──────────────────────────────────────────────────────
 
-  private async upsertFixture(fixture: ApiFootballFixture) {
-    const league = await this.upsertLeague(fixture);
-    const season = await this.upsertSeason(league.id, fixture.league.season);
-    const homeTeam = await this.upsertTeam(fixture.teams.home, fixture.league.country);
-    const awayTeam = await this.upsertTeam(fixture.teams.away, fixture.league.country);
+  private async upsertMatch(match: FDMatch) {
+    const league = await this.upsertLeague(match);
+    const season = await this.upsertSeason(league.id, match.season.startDate.slice(0, 4));
+    const homeTeam = await this.upsertTeam(match.homeTeam);
+    const awayTeam = await this.upsertTeam(match.awayTeam);
+
+    const round = match.matchday != null ? `Matchday ${match.matchday}` : match.stage;
 
     return this.prisma.writer.match.upsert({
-      where: { externalId: String(fixture.fixture.id) },
+      where: { externalId: String(match.id) },
       create: {
-        externalId: String(fixture.fixture.id),
+        externalId: String(match.id),
         seasonId: season.id,
         homeTeamId: homeTeam.id,
         awayTeamId: awayTeam.id,
-        homeScore: fixture.goals.home ?? 0,
-        awayScore: fixture.goals.away ?? 0,
-        status: STATUS_MAP[fixture.fixture.status.short] ?? 'SCHEDULED',
-        minute: fixture.fixture.status.elapsed ?? null,
-        kickoffTime: new Date(fixture.fixture.date),
-        venue: fixture.fixture.venue.name ?? undefined,
-        round: fixture.league.round,
+        homeScore: match.score.fullTime.home ?? 0,
+        awayScore: match.score.fullTime.away ?? 0,
+        status: STATUS_MAP[match.status] ?? 'SCHEDULED',
+        minute: null,
+        kickoffTime: new Date(match.utcDate),
+        round,
       },
       update: {
-        homeScore: fixture.goals.home ?? 0,
-        awayScore: fixture.goals.away ?? 0,
-        status: STATUS_MAP[fixture.fixture.status.short] ?? 'SCHEDULED',
-        minute: fixture.fixture.status.elapsed ?? null,
-        venue: fixture.fixture.venue.name ?? undefined,
-        round: fixture.league.round,
+        homeScore: match.score.fullTime.home ?? 0,
+        awayScore: match.score.fullTime.away ?? 0,
+        status: STATUS_MAP[match.status] ?? 'SCHEDULED',
+        minute: null,
+        round,
       },
     });
   }
 
-  private async syncMatchEvents(
-    externalFixtureId: number,
-    internalMatchId: string,
-    currentHomeScore: number,
-    currentAwayScore: number,
-    currentStatus: MatchStatus,
-    homeTeamExternalId: string,
-    awayTeamExternalId: string,
-  ): Promise<void> {
-    const events = await this.footballData.getFixtureEvents(externalFixtureId);
-
-    for (const event of events) {
-      const team = await this.prisma.reader.team.findUnique({
-        where: { externalId: String(event.team.id) },
-      });
-      if (!team) continue;
-
-      const type = mapEventType(event.type, event.detail);
-      if (!type) continue;
-
-      const player = await this.upsertMinimalPlayer(event.player.id, event.player.name, team.id);
-
-      let assistPlayerId: string | undefined;
-      if (event.assist.id) {
-        const assist = await this.upsertMinimalPlayer(
-          event.assist.id,
-          event.assist.name ?? '',
-          team.id,
-        );
-        assistPlayerId = assist.id;
-      }
-
-      const externalEventId = `${externalFixtureId}-${event.time.elapsed}-${event.player.id}`;
-      await this.prisma.writer.matchEvent.upsert({
-        where: { externalId: externalEventId },
-        create: {
-          externalId: externalEventId,
-          matchId: internalMatchId,
-          type,
-          minute: event.time.elapsed,
-          addedTime: event.time.extra ?? undefined,
-          teamId: team.id,
-          playerId: player.id,
-          assistPlayerId,
-          detail: event.detail,
-        },
-        update: {
-          detail: event.detail,
-          addedTime: event.time.extra ?? undefined,
-        },
-      });
-    }
-
-    // Fan out current match state to WebSocket clients via Redis pub/sub
-    await this.redis.publish('match-events', {
-      matchId: internalMatchId,
-      homeScore: currentHomeScore,
-      awayScore: currentAwayScore,
-      status: currentStatus,
-    });
-
-    // Notify when a match finishes
-    if (currentStatus === 'FINISHED') {
-      await this.redis.publish('match-finished', { matchId: internalMatchId });
-      await this.syncMatchStats(externalFixtureId, internalMatchId, homeTeamExternalId, awayTeamExternalId).catch(
-        (err) => this.logger.error(`Failed to sync stats for fixture ${externalFixtureId}`, err),
-      );
-    }
-  }
-
-  private async syncMatchStats(
-    externalFixtureId: number,
-    internalMatchId: string,
-    homeTeamExternalId: string,
-    awayTeamExternalId: string,
-  ): Promise<void> {
-    const [statsData, playersData] = await Promise.all([
-      this.footballData.getFixtureStatistics(externalFixtureId),
-      this.footballData.getFixturePlayers(externalFixtureId),
-    ]);
-
-    // ─── MatchStats upsert ──────────────────────────────────────────────────
-
-    const findStat = (
-      stats: ApiFootballFixtureStatistic['statistics'],
-      type: string,
-    ): string | number | null => stats.find((s) => s.type === type)?.value ?? null;
-
-    const parsePct = (v: string | number | null): number | null =>
-      v !== null ? parseFloat(String(v)) : null;
-
-    const parseNum = (v: string | number | null): number | null =>
-      typeof v === 'number' ? v : v !== null ? parseInt(String(v), 10) : null;
-
-    const homeStats = statsData.find((s) => String(s.team.id) === homeTeamExternalId)?.statistics ?? [];
-    const awayStats = statsData.find((s) => String(s.team.id) === awayTeamExternalId)?.statistics ?? [];
-
-    const mappedStats = {
-      possessionHome: parsePct(findStat(homeStats, 'Ball Possession')),
-      possessionAway: parsePct(findStat(awayStats, 'Ball Possession')),
-      shotsHome: parseNum(findStat(homeStats, 'Total Shots')),
-      shotsAway: parseNum(findStat(awayStats, 'Total Shots')),
-      shotsOnTargetHome: parseNum(findStat(homeStats, 'Shots on Goal')),
-      shotsOnTargetAway: parseNum(findStat(awayStats, 'Shots on Goal')),
-      cornersHome: parseNum(findStat(homeStats, 'Corner Kicks')),
-      cornersAway: parseNum(findStat(awayStats, 'Corner Kicks')),
-      foulsHome: parseNum(findStat(homeStats, 'Fouls')),
-      foulsAway: parseNum(findStat(awayStats, 'Fouls')),
-      passAccuracyHome: parsePct(findStat(homeStats, 'Passes %')),
-      passAccuracyAway: parsePct(findStat(awayStats, 'Passes %')),
-      xGHome: parsePct(findStat(homeStats, 'expected_goals')),
-      xGAway: parsePct(findStat(awayStats, 'expected_goals')),
-    };
-
-    await this.prisma.writer.matchStats.upsert({
-      where: { matchId: internalMatchId },
-      create: { matchId: internalMatchId, ...mappedStats },
-      update: mappedStats,
-    });
-
-    // ─── PlayerMatchRating upserts ──────────────────────────────────────────
-
-    for (const teamEntry of playersData) {
-      const team = await this.prisma.reader.team.findUnique({
-        where: { externalId: String(teamEntry.team.id) },
-      });
-      if (!team) continue;
-
-      for (const { player, statistics } of teamEntry.players) {
-        const stat = statistics[0];
-        if (!stat?.games.minutes) continue; // skip unused substitutes
-
-        const rating = stat.games.rating ? parseFloat(stat.games.rating) : null;
-        if (rating === null) continue;
-
-        const internalPlayer = await this.upsertMinimalPlayer(player.id, player.name, team.id);
-
-        await this.prisma.writer.playerMatchRating.upsert({
-          where: { playerId_matchId: { playerId: internalPlayer.id, matchId: internalMatchId } },
-          create: {
-            playerId: internalPlayer.id,
-            matchId: internalMatchId,
-            rating,
-            minutes: stat.games.minutes,
-            goals: stat.goals.total ?? 0,
-            assists: stat.goals.assists ?? 0,
-          },
-          update: {
-            rating,
-            minutes: stat.games.minutes,
-            goals: stat.goals.total ?? 0,
-            assists: stat.goals.assists ?? 0,
-          },
-        });
-      }
-    }
-  }
-
-  private async upsertLeague(fixture: ApiFootballFixture) {
+  private async upsertLeague(match: FDMatch) {
     return this.prisma.writer.league.upsert({
-      where: { externalId: String(fixture.league.id) },
+      where: { externalId: match.competition.code },
       create: {
-        externalId: String(fixture.league.id),
-        name: fixture.league.name,
-        shortName: fixture.league.name,
-        country: fixture.league.country,
-        logoUrl: fixture.league.logo,
+        externalId: match.competition.code,
+        name: match.competition.name,
+        shortName: match.competition.name,
+        country: '',
+        logoUrl: null,
       },
       update: {
-        name: fixture.league.name,
-        logoUrl: fixture.league.logo,
+        name: match.competition.name,
       },
     });
   }
 
-  private async upsertSeason(leagueId: string, year: number) {
-    const name = String(year);
+  private async upsertSeason(leagueId: string, year: string) {
     const existing = await this.prisma.reader.season.findFirst({
-      where: { leagueId, name },
+      where: { leagueId, name: year },
     });
     if (existing) return existing;
 
     try {
+      const y = parseInt(year, 10);
       return await this.prisma.writer.season.create({
         data: {
           leagueId,
-          name,
-          startDate: new Date(year, 7, 1),    // Aug 1 of season year
-          endDate: new Date(year + 1, 5, 30), // Jun 30 of following year
+          name: year,
+          startDate: new Date(y, 7, 1),
+          endDate: new Date(y + 1, 5, 30),
           isCurrent: true,
         },
       });
     } catch {
-      // Handle race condition: another concurrent job created the same season
-      const created = await this.prisma.reader.season.findFirst({ where: { leagueId, name } });
-      if (!created) throw new Error(`Season ${name} for league ${leagueId} not found after create conflict`);
+      const created = await this.prisma.reader.season.findFirst({ where: { leagueId, name: year } });
+      if (!created) throw new Error(`Season ${year} for league ${leagueId} not found after create conflict`);
       return created;
     }
   }
 
-  private async upsertTeam(apiTeam: ApiFootballTeam, country: string) {
+  private async upsertTeam(teamRef: { id: number; name: string; shortName: string; tla: string; crest: string }) {
     return this.prisma.writer.team.upsert({
-      where: { externalId: String(apiTeam.id) },
+      where: { externalId: String(teamRef.id) },
       create: {
-        externalId: String(apiTeam.id),
-        name: apiTeam.name,
-        shortName: apiTeam.name,
-        logoUrl: apiTeam.logo,
-        countryCode: country,
+        externalId: String(teamRef.id),
+        name: teamRef.name,
+        shortName: teamRef.tla,
+        logoUrl: teamRef.crest,
+        countryCode: '',
       },
       update: {
-        name: apiTeam.name,
-        logoUrl: apiTeam.logo,
+        name: teamRef.name,
+        shortName: teamRef.tla,
+        logoUrl: teamRef.crest,
       },
     });
   }
 
-  private async upsertMinimalPlayer(externalId: number, name: string, teamId: string) {
-    return this.prisma.writer.player.upsert({
-      where: { externalId: String(externalId) },
-      create: {
-        externalId: String(externalId),
-        name,
-        teamId,
-      },
-      update: { name },
-    });
-  }
-
-  private async upsertStanding(entry: ApiFootballStanding, seasonId: string) {
+  private async upsertStanding(entry: FDStandingEntry, seasonId: string) {
     const team = await this.prisma.reader.team.findUnique({
       where: { externalId: String(entry.team.id) },
     });
@@ -416,26 +213,26 @@ export class IngestService {
       create: {
         seasonId,
         teamId: team.id,
-        position: entry.rank,
-        played: entry.all.played,
-        won: entry.all.win,
-        drawn: entry.all.draw,
-        lost: entry.all.lose,
-        goalsFor: entry.all.goals.for,
-        goalsAgainst: entry.all.goals.against,
+        position: entry.position,
+        played: entry.playedGames,
+        won: entry.won,
+        drawn: entry.draw,
+        lost: entry.lost,
+        goalsFor: entry.goalsFor,
+        goalsAgainst: entry.goalsAgainst,
         points: entry.points,
-        form: entry.form,
+        form: entry.form ?? undefined,
       },
       update: {
-        position: entry.rank,
-        played: entry.all.played,
-        won: entry.all.win,
-        drawn: entry.all.draw,
-        lost: entry.all.lose,
-        goalsFor: entry.all.goals.for,
-        goalsAgainst: entry.all.goals.against,
+        position: entry.position,
+        played: entry.playedGames,
+        won: entry.won,
+        drawn: entry.draw,
+        lost: entry.lost,
+        goalsFor: entry.goalsFor,
+        goalsAgainst: entry.goalsAgainst,
         points: entry.points,
-        form: entry.form,
+        form: entry.form ?? undefined,
       },
     });
   }

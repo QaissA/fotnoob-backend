@@ -18,8 +18,7 @@ services:
       JWT_REFRESH_SECRET: local_dev_refresh_secret_min_32_chars_xxx
       JWT_ACCESS_EXPIRES_IN: 15m
       JWT_REFRESH_EXPIRES_IN: 30d
-      RAPIDAPI_KEY: ${RAPIDAPI_KEY:-placeholder}
-      RAPIDAPI_HOST: api-football-v1.p.rapidapi.com
+      FOOTBALL_DATA_API_KEY: ${FOOTBALL_DATA_API_KEY:-placeholder}
       ALLOWED_ORIGINS: http://localhost:4200,http://localhost:3000
     depends_on:
       postgres:

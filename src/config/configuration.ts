@@ -20,8 +20,7 @@ const configSchema = z.object({
   JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
 
   // API-Football (RapidAPI)
-  RAPIDAPI_KEY: z.string(),
-  RAPIDAPI_HOST: z.string().default('api-football-v1.p.rapidapi.com'),
+  FOOTBALL_DATA_API_KEY: z.string(),
 
   // Throttle
   THROTTLE_TTL: z.coerce.number().default(60),

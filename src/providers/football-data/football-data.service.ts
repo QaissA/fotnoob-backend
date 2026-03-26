@@ -3,19 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import axios, { type AxiosInstance } from 'axios';
 import type { AppConfig } from '../../config/configuration.js';
 import type {
-  ApiFootballFixture,
-  ApiFootballEvent,
-  ApiFootballStanding,
-  ApiFootballPlayer,
-  ApiFootballFixtureStatistic,
-  ApiFootballFixturePlayer,
+  FDMatch,
+  FDStandingEntry,
+  FDCompetitionStandings,
+  FDPerson,
+  FDTeam,
 } from './football-data.types.js';
-
-interface ApiResponse<T> {
-  response: T;
-  results: number;
-  errors: string[] | Record<string, string>;
-}
+import type { LeagueCode } from './league-codes.js';
 
 @Injectable()
 export class FootballDataService {
@@ -24,79 +18,79 @@ export class FootballDataService {
 
   constructor(private readonly config: ConfigService<AppConfig>) {
     this.http = axios.create({
-      baseURL: 'https://api-football-v1.p.rapidapi.com/v3',
+      baseURL: 'https://api.football-data.org/v4',
       headers: {
-        'X-RapidAPI-Key': this.config.get('RAPIDAPI_KEY', { infer: true }),
-        'X-RapidAPI-Host': this.config.get('RAPIDAPI_HOST', { infer: true }),
+        'X-Auth-Token': this.config.get('FOOTBALL_DATA_API_KEY', { infer: true }),
       },
       timeout: 10_000,
     });
+
+    // Rate limit logging — free tier = 10 req/min
+    this.http.interceptors.response.use((response) => {
+      const remaining = response.headers['x-requests-available-minute'];
+      if (remaining !== undefined) {
+        this.logger.debug(`[football-data] ${remaining} requests remaining this minute`);
+        if (Number(remaining) <= 2) {
+          this.logger.warn('[football-data] Rate limit nearly hit — slow down requests');
+        }
+      }
+      return response;
+    });
   }
 
-  async getFixturesByDate(date: string): Promise<ApiFootballFixture[]> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballFixture[]>>(
-      '/fixtures',
-      { params: { date } },
-    );
-    this.logger.debug(`Fetched ${data.results} fixtures for ${date}`);
-    return data.response;
+  async getMatchesByDate(date: string): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>('/matches', {
+      params: { date },
+    });
+    this.logger.debug(`Fetched ${data.matches.length} matches for ${date}`);
+    return data.matches;
   }
 
-  async getFixture(fixtureId: number): Promise<ApiFootballFixture | null> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballFixture[]>>(
-      '/fixtures',
-      { params: { id: fixtureId } },
-    );
-    return data.response[0] ?? null;
+  async getMatch(matchId: number): Promise<FDMatch> {
+    const { data } = await this.http.get<FDMatch>(`/matches/${matchId}`);
+    return data;
   }
 
-  async getFixtureEvents(fixtureId: number): Promise<ApiFootballEvent[]> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballEvent[]>>(
-      '/fixtures/events',
-      { params: { fixture: fixtureId } },
-    );
-    return data.response;
+  async getLiveMatches(): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>('/matches', {
+      params: { status: 'IN_PLAY,PAUSED,HALFTIME' },
+    });
+    return data.matches;
   }
 
-  async getStandings(leagueId: number, season: number): Promise<ApiFootballStanding[][]> {
-    const { data } = await this.http.get<ApiResponse<Array<{ league: { standings: ApiFootballStanding[][] } }>>>(
-      '/standings',
-      { params: { league: leagueId, season } },
-    );
-    return data.response[0]?.league.standings ?? [];
-  }
-
-  async getPlayer(playerId: number, season: number): Promise<ApiFootballPlayer | null> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballPlayer[]>>(
-      '/players',
-      { params: { id: playerId, season } },
-    );
-    return data.response[0] ?? null;
-  }
-
-  async getFixtureStatistics(fixtureId: number): Promise<ApiFootballFixtureStatistic[]> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballFixtureStatistic[]>>(
-      '/fixtures/statistics',
-      { params: { fixture: fixtureId } },
-    );
-    return data.response;
-  }
-
-  async getFixturePlayers(fixtureId: number): Promise<ApiFootballFixturePlayer[]> {
-    const { data } = await this.http.get<ApiResponse<ApiFootballFixturePlayer[]>>(
-      '/fixtures/players',
-      { params: { fixture: fixtureId } },
-    );
-    return data.response;
-  }
-
-  async getLiveFixtures(leagueId?: number): Promise<ApiFootballFixture[]> {
-    const params: Record<string, unknown> = { live: 'all' };
-    if (leagueId) params['league'] = leagueId;
-    const { data } = await this.http.get<ApiResponse<ApiFootballFixture[]>>(
-      '/fixtures',
+  async getCompetitionMatches(
+    leagueCode: LeagueCode,
+    params?: { matchday?: number; status?: string; dateFrom?: string; dateTo?: string },
+  ): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>(
+      `/competitions/${leagueCode}/matches`,
       { params },
     );
-    return data.response;
+    return data.matches;
+  }
+
+  async getStandings(leagueCode: LeagueCode): Promise<FDStandingEntry[]> {
+    const { data } = await this.http.get<FDCompetitionStandings>(
+      `/competitions/${leagueCode}/standings`,
+    );
+    const total = data.standings.find((s) => s.type === 'TOTAL');
+    return total?.table ?? [];
+  }
+
+  async getPerson(personId: number): Promise<FDPerson> {
+    const { data } = await this.http.get<FDPerson>(`/persons/${personId}`);
+    return data;
+  }
+
+  async getTeam(teamId: number): Promise<FDTeam> {
+    const { data } = await this.http.get<FDTeam>(`/teams/${teamId}`);
+    return data;
+  }
+
+  async getCompetitionTeams(leagueCode: LeagueCode): Promise<FDTeam[]> {
+    const { data } = await this.http.get<{ teams: FDTeam[] }>(
+      `/competitions/${leagueCode}/teams`,
+    );
+    return data.teams;
   }
 }

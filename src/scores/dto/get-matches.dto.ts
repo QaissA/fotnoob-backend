@@ -5,6 +5,9 @@ export const GetMatchesQuerySchema = z.object({
   date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
+    .refine((val) => !isNaN(new Date(val).getTime()), {
+      message: 'date must be a valid calendar date',
+    })
     .default(() => new Date().toISOString().split('T')[0]!),
 });
 

@@ -49,7 +49,6 @@ Thumbs.db
 # dotenv (we don't commit .env, but .env.example is ok)
 .env
 .env.test
-.env.example
 
 # pnpm
 .pnpm-store

@@ -1,98 +1,113 @@
-// Raw API-Football (RapidAPI) response shapes
+// Raw football-data.org v4 response shapes
 
-export interface ApiFootballFixture {
-  fixture: {
-    id: number;
-    referee: string | null;
-    timezone: string;
-    date: string; // ISO 8601
-    timestamp: number;
-    status: {
-      long: string;
-      short: string; // 'NS' | '1H' | 'HT' | '2H' | 'FT' | 'PST' | 'CANC'
-      elapsed: number | null;
-    };
-    venue: { id: number | null; name: string | null; city: string | null };
-  };
-  league: {
-    id: number;
-    name: string;
-    country: string;
-    logo: string;
-    season: number;
-    round: string;
-  };
-  teams: {
-    home: ApiFootballTeam;
-    away: ApiFootballTeam;
-  };
-  goals: { home: number | null; away: number | null };
-}
-
-export interface ApiFootballTeam {
+export interface FDTeamRef {
   id: number;
   name: string;
-  logo: string;
-  winner: boolean | null;
+  shortName: string;
+  tla: string;
+  crest: string;
 }
 
-export interface ApiFootballEvent {
-  time: { elapsed: number; extra: number | null };
-  team: { id: number; name: string };
-  player: { id: number; name: string };
-  assist: { id: number | null; name: string | null };
-  type: string; // 'Goal' | 'Card' | 'subst' | 'Var'
-  detail: string; // 'Normal Goal' | 'Yellow Card' | 'Red Card' | etc.
-  comments: string | null;
+export interface FDMatch {
+  id: number;
+  utcDate: string; // ISO 8601
+  status:
+    | 'SCHEDULED'
+    | 'TIMED'
+    | 'IN_PLAY'
+    | 'PAUSED'
+    | 'HALFTIME'
+    | 'FINISHED'
+    | 'POSTPONED'
+    | 'CANCELLED'
+    | 'AWARDED'
+    | 'SUSPENDED';
+  matchday: number | null;
+  stage: string;
+  competition: { id: number; name: string; code: string };
+  season: {
+    id: number;
+    startDate: string;
+    endDate: string;
+    currentMatchday: number;
+  };
+  homeTeam: FDTeamRef;
+  awayTeam: FDTeamRef;
+  score: {
+    winner: 'HOME_TEAM' | 'AWAY_TEAM' | 'DRAW' | null;
+    fullTime: { home: number | null; away: number | null };
+    halfTime: { home: number | null; away: number | null };
+  };
+  referees: Array<{ id: number; name: string; type: string }>;
 }
 
-export interface ApiFootballStanding {
-  rank: number;
-  team: { id: number; name: string; logo: string };
+export interface FDStandingEntry {
+  position: number;
+  team: { id: number; name: string; crest: string };
+  playedGames: number;
+  won: number;
+  draw: number;
+  lost: number;
   points: number;
-  goalsDiff: number;
-  group: string;
-  form: string;
-  status: string;
-  description: string | null;
-  all: { played: number; win: number; draw: number; lose: number; goals: { for: number; against: number } };
+  goalsFor: number;
+  goalsAgainst: number;
+  goalDifference: number;
+  form: string | null;
 }
 
-export interface ApiFootballFixtureStatistic {
-  team: { id: number; name: string };
-  statistics: Array<{ type: string; value: string | number | null }>;
-}
-
-export interface ApiFootballFixturePlayer {
-  team: { id: number; name: string };
-  players: Array<{
-    player: { id: number; name: string; photo: string };
-    statistics: Array<{
-      games: { minutes: number | null; rating: string | null; substitute: boolean };
-      goals: { total: number | null; assists: number | null };
-    }>;
+export interface FDCompetitionStandings {
+  competition: { id: number; name: string; code: string };
+  season: { id: number; startDate: string; endDate: string; currentMatchday: number };
+  standings: Array<{
+    stage: string;
+    type: 'TOTAL' | 'HOME' | 'AWAY';
+    table: FDStandingEntry[];
   }>;
 }
 
-export interface ApiFootballPlayer {
-  player: {
+export interface FDPerson {
+  id: number;
+  name: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  nationality: string;
+  position: string | null;
+  shirtNumber: number | null;
+  currentTeam: {
     id: number;
     name: string;
-    firstname: string;
-    lastname: string;
-    age: number;
-    birth: { date: string; place: string; country: string };
-    nationality: string;
-    height: string;
-    weight: string;
-    photo: string;
-  };
-  statistics: ApiFootballPlayerStats[];
+    joined: string | null;
+    contract: { start: string | null; until: string | null } | null;
+  } | null;
 }
 
-export interface ApiFootballPlayerStats {
-  team: { id: number; name: string };
-  league: { id: number; name: string; season: number };
-  games: { position: string; rating: string | null; captain: boolean };
-  goals: { total: number | null; assists: number | null };
+export interface FDSquadMember {
+  id: number;
+  name: string;
+  position: string | null;
+  dateOfBirth: string;
+  nationality: string;
+  shirtNumber: number | null;
+}
+
+export interface FDTeam {
+  id: number;
+  name: string;
+  shortName: string;
+  tla: string;
+  crest: string;
+  address: string | null;
+  website: string | null;
+  founded: number | null;
+  clubColors: string | null;
+  venue: string | null;
+  coach: {
+    id: number;
+    name: string;
+    dateOfBirth: string;
+    nationality: string;
+  } | null;
+  runningCompetitions: Array<{ id: number; name: string; code: string }>;
+  squad: FDSquadMember[];
 }
