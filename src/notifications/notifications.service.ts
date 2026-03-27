@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
+import { FcmService } from './fcm.service.js';
 import type { RegisterFcmDto, UpdatePrefsDto, NotificationPrefsDto } from './dto/notifications.dto.js';
 
 export interface MatchNotificationPayload {
@@ -17,6 +18,7 @@ export class NotificationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly fcm: FcmService,
   ) {
     // Subscribe to match events published by the Scores service
     void this.redis.subscriber.subscribe('match-events', 'match-finished');
@@ -133,15 +135,25 @@ export class NotificationsService {
 
       if (batch.length === 0) break;
 
+      const tokens: string[] = [];
+
       for (const fav of batch) {
         const prefs = fav.user.notificationPrefs;
         const enabled = prefs ? prefs[prefKey as keyof typeof prefs] : true;
         if (!enabled) continue;
 
-        for (const fcm of fav.user.fcmTokens) {
-          this.logger.debug(`[FCM] → ${fcm.token.slice(0, 12)}… | ${title}`);
-          // TODO: replace with real FCM SDK call (firebase-admin)
+        for (const fcmToken of fav.user.fcmTokens) {
+          tokens.push(fcmToken.token);
         }
+      }
+
+      const invalidTokens = await this.fcm.sendMulticast(tokens, title, body);
+
+      if (invalidTokens.length > 0) {
+        await this.prisma.writer.fcmToken.deleteMany({
+          where: { token: { in: invalidTokens } },
+        });
+        this.logger.debug(`Pruned ${invalidTokens.length} invalid FCM tokens`);
       }
 
       cursor = batch[batch.length - 1]!.userId;

@@ -5,7 +5,7 @@ import type { MatchStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { FootballDataService } from '../providers/football-data/football-data.service.js';
-import type { FDMatch, FDStandingEntry } from '../providers/football-data/football-data.types.js';
+import type { FDMatch, FDStandingEntry, FDScorer, FDTeamMatchFilters } from '../providers/football-data/football-data.types.js';
 import type { LeagueCode } from '../providers/football-data/league-codes.js';
 
 const STATUS_MAP: Record<string, MatchStatus> = {
@@ -110,6 +110,84 @@ export class IngestService {
     }
   }
 
+  // ─── Job D: Competition metadata sync (Sunday 2 AM) ──────────────────────
+
+  @Cron('0 2 * * 0')
+  async syncCompetitions(): Promise<void> {
+    this.logger.log('Syncing competition metadata');
+    const competitions = await this.footballData.getCompetitions();
+
+    await this.throttledSequential(competitions, async (comp) => {
+      try {
+        const detail = await this.footballData.getCompetition(comp.code as LeagueCode);
+        await this.prisma.writer.league.upsert({
+          where: { externalId: comp.code },
+          create: {
+            externalId: comp.code,
+            name: comp.name,
+            shortName: comp.name,
+            country: detail.area.name,
+            logoUrl: detail.emblem ?? null,
+          },
+          update: {
+            name: comp.name,
+            country: detail.area.name,
+            logoUrl: detail.emblem ?? null,
+          },
+        });
+        this.logger.debug(`Synced competition ${comp.code}`);
+      } catch (err) {
+        this.logger.error(`Failed to sync competition ${comp.code}`, err);
+      }
+    });
+  }
+
+  // ─── Job E: Top scorers sync (daily 5 AM) ────────────────────────────────
+
+  @Cron('0 5 * * *')
+  async syncTopScorers(): Promise<void> {
+    const activeLeagues = await this.prisma.reader.league.findMany({
+      where: { isActive: true },
+      include: { seasons: { where: { isCurrent: true } } },
+    });
+
+    for (const league of activeLeagues) {
+      const season = league.seasons[0];
+      if (!season) continue;
+      try {
+        const scorers = await this.footballData.getCompetitionScorers(
+          league.externalId as LeagueCode,
+          { limit: 10 },
+        );
+        for (const scorer of scorers) {
+          await this.upsertTopScorer(scorer, season.id).catch((err) =>
+            this.logger.error(`Failed to upsert scorer ${scorer.player.id}`, err),
+          );
+        }
+        this.logger.debug(`Synced top scorers for league ${league.name}`);
+      } catch (err) {
+        this.logger.error(`Failed to sync top scorers for league ${league.id}`, err);
+      }
+    }
+  }
+
+  // ─── On-demand: Team matches backfill ────────────────────────────────────
+
+  async syncTeamMatches(teamId: number, params?: FDTeamMatchFilters): Promise<number> {
+    const matches = await this.footballData.getTeamMatches(teamId, params);
+    this.logger.debug(`Backfilling ${matches.length} matches for team ${teamId}`);
+    let ingested = 0;
+    for (const match of matches) {
+      try {
+        await this.upsertMatch(match);
+        ingested++;
+      } catch (err) {
+        this.logger.error(`Failed to upsert match ${match.id}`, err);
+      }
+    }
+    return ingested;
+  }
+
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async upsertMatch(match: FDMatch) {
@@ -198,6 +276,46 @@ export class IngestService {
         name: teamRef.name,
         shortName: teamRef.tla,
         logoUrl: teamRef.crest,
+      },
+    });
+  }
+
+  private async throttledSequential<T>(
+    items: T[],
+    fn: (item: T) => Promise<void>,
+    delayMs = 6_100,
+  ): Promise<void> {
+    for (let i = 0; i < items.length; i++) {
+      await fn(items[i]);
+      if (i < items.length - 1) {
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
+
+  private async upsertTopScorer(scorer: FDScorer, seasonId: string) {
+    const team = await this.prisma.reader.team.findUnique({
+      where: { externalId: String(scorer.team.id) },
+    });
+    if (!team) return;
+
+    await this.prisma.writer.topScorer.upsert({
+      where: { seasonId_playerId: { seasonId, playerId: String(scorer.player.id) } },
+      create: {
+        seasonId,
+        playerId: String(scorer.player.id),
+        teamId: team.id,
+        goals: scorer.goals,
+        assists: scorer.assists ?? undefined,
+        penalties: scorer.penalties ?? undefined,
+        playedGames: scorer.playedMatches,
+      },
+      update: {
+        teamId: team.id,
+        goals: scorer.goals,
+        assists: scorer.assists ?? undefined,
+        penalties: scorer.penalties ?? undefined,
+        playedGames: scorer.playedMatches,
       },
     });
   }

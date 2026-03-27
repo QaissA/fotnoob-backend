@@ -8,6 +8,13 @@ import type {
   FDCompetitionStandings,
   FDPerson,
   FDTeam,
+  FDArea,
+  FDCompetition,
+  FDScorer,
+  FDHead2Head,
+  FDMatchFilters,
+  FDTeamMatchFilters,
+  FDPersonMatchFilters,
 } from './football-data.types.js';
 import type { LeagueCode } from './league-codes.js';
 
@@ -92,5 +99,74 @@ export class FootballDataService {
       `/competitions/${leagueCode}/teams`,
     );
     return data.teams;
+  }
+
+  async getArea(areaId: number): Promise<FDArea> {
+    const { data } = await this.http.get<FDArea>(`/areas/${areaId}`);
+    return data;
+  }
+
+  async getAreas(): Promise<FDArea[]> {
+    const { data } = await this.http.get<{ areas: FDArea[] }>('/areas');
+    this.logger.debug(`Fetched ${data.areas.length} areas`);
+    return data.areas;
+  }
+
+  async getCompetition(leagueCode: LeagueCode): Promise<FDCompetition> {
+    const { data } = await this.http.get<FDCompetition>(`/competitions/${leagueCode}`);
+    return data;
+  }
+
+  async getCompetitions(params?: { areas?: string }): Promise<FDCompetition[]> {
+    const { data } = await this.http.get<{ competitions: FDCompetition[] }>('/competitions', { params });
+    this.logger.debug(`Fetched ${data.competitions.length} competitions`);
+    return data.competitions;
+  }
+
+  async getCompetitionScorers(
+    leagueCode: LeagueCode,
+    params?: { limit?: number; season?: number },
+  ): Promise<FDScorer[]> {
+    const { data } = await this.http.get<{ scorers: FDScorer[] }>(
+      `/competitions/${leagueCode}/scorers`,
+      { params },
+    );
+    return data.scorers;
+  }
+
+  async getTeams(params?: { limit?: number; offset?: number }): Promise<FDTeam[]> {
+    const { data } = await this.http.get<{ teams: FDTeam[] }>('/teams', { params });
+    this.logger.debug(`Fetched ${data.teams.length} teams`);
+    return data.teams;
+  }
+
+  async getTeamMatches(teamId: number, params?: FDTeamMatchFilters): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>(
+      `/teams/${teamId}/matches`,
+      { params },
+    );
+    return data.matches;
+  }
+
+  async getPersonMatches(personId: number, params?: FDPersonMatchFilters): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>(
+      `/persons/${personId}/matches`,
+      { params },
+    );
+    return data.matches;
+  }
+
+  async getMatches(params: FDMatchFilters): Promise<FDMatch[]> {
+    const { data } = await this.http.get<{ matches: FDMatch[] }>('/matches', { params });
+    this.logger.debug(`Fetched ${data.matches.length} matches`);
+    return data.matches;
+  }
+
+  async getHead2Head(
+    matchId: number,
+    params?: { limit?: number; dateFrom?: string; dateTo?: string; competitions?: string },
+  ): Promise<FDHead2Head> {
+    const { data } = await this.http.get<FDHead2Head>(`/matches/${matchId}/head2head`, { params });
+    return data;
   }
 }

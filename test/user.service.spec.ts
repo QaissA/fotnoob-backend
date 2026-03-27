@@ -2,14 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { UserService } from '../src/user/user.service.js';
 
-const bcryptMock = await vi.hoisted(async () => {
-  const mod = await import('bcryptjs');
-  return {
-    hash: vi.fn().mockImplementation((val: string) => Promise.resolve(`hashed:${val}`)),
-    compare: vi.fn().mockResolvedValue(true),
-    genSalt: mod.genSalt,
-  };
-});
+const bcryptMock = vi.hoisted(() => ({
+  hash: vi.fn().mockImplementation((val: string) => Promise.resolve(`hashed:${val}`)),
+  compare: vi.fn().mockResolvedValue(true),
+  genSalt: vi.fn().mockImplementation((rounds: number) => Promise.resolve(`$2b$${rounds}$fakesalt`)),
+}));
 
 vi.mock('bcryptjs', () => bcryptMock);
 

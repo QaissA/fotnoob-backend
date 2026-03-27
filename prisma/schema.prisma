@@ -38,11 +38,28 @@ model Season {
   endDate     DateTime
   isCurrent   Boolean  @default(false)
 
-  league      League   @relation(fields: [leagueId], references: [id])
+  league      League      @relation(fields: [leagueId], references: [id])
   matches     Match[]
   standings   Standing[]
+  topScorers  TopScorer[]
 
   @@index([leagueId, isCurrent])
+}
+
+model TopScorer {
+  id          String  @id @default(cuid())
+  seasonId    String
+  playerId    String
+  teamId      String
+  goals       Int
+  assists     Int?
+  penalties   Int?
+  playedGames Int
+
+  season      Season  @relation(fields: [seasonId], references: [id])
+
+  @@unique([seasonId, playerId])
+  @@index([seasonId])
 }
 
 // ─── TEAMS ─────────────────────────────────────────────────────────────────

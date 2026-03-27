@@ -16,7 +16,7 @@ import { SearchQuerySchema, type SearchQuery, SearchResponseDto } from './dto/se
 @UseGuards(JwtAuthGuard)
 @Controller('search')
 export class SearchController {
-  constructor(private readonly search: SearchService) {}
+  constructor(private readonly searchService: SearchService) {}
 
   @Public()
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
@@ -32,6 +32,6 @@ export class SearchController {
   search(
     @Query(new ZodValidationPipe(SearchQuerySchema)) query: SearchQuery,
   ): Promise<SearchResponseDto> {
-    return this.search.search(query);
+    return this.searchService.search(query);
   }
 }

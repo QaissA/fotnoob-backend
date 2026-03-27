@@ -4,7 +4,11 @@
       "Bash(xargs ls:*)",
       "Bash(find /c/dev/backend/fotNob/src -type f -name *.ts)",
       "Bash(find /c/dev/backend/fotNob/src -name *constant* -o -name *league* -o -name *config*)",
-      "Bash(find /c/dev/backend/fotNob/src -not -path */node_modules/* -type f -name *.ts)"
+      "Bash(find /c/dev/backend/fotNob/src -not -path */node_modules/* -type f -name *.ts)",
+      "Bash(pnpm tsc:*)",
+      "Bash(docker exec:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm build:*)"
     ]
   }
 }

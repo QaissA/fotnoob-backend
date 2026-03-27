@@ -22,6 +22,9 @@ const configSchema = z.object({
   // API-Football (RapidAPI)
   FOOTBALL_DATA_API_KEY: z.string(),
 
+  // Firebase Cloud Messaging
+  FIREBASE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+
   // Throttle
   THROTTLE_TTL: z.coerce.number().default(60),
   THROTTLE_LIMIT: z.coerce.number().default(100),

@@ -111,3 +111,84 @@ export interface FDTeam {
   runningCompetitions: Array<{ id: number; name: string; code: string }>;
   squad: FDSquadMember[];
 }
+
+export interface FDArea {
+  id: number;
+  name: string;
+  code: string | null;
+  flag: string | null;
+  parentArea: { id: number; name: string } | null;
+}
+
+export interface FDCompetition {
+  id: number;
+  name: string;
+  code: string;
+  type: 'LEAGUE' | 'CUP';
+  emblem: string | null;
+  area: FDArea;
+  currentSeason: {
+    id: number;
+    startDate: string;
+    endDate: string;
+    currentMatchday: number | null;
+    winner: { id: number; name: string } | null;
+  } | null;
+  numberOfAvailableSeasons: number;
+  lastUpdated: string;
+}
+
+export interface FDScorer {
+  player: {
+    id: number;
+    name: string;
+    firstName: string;
+    lastName: string;
+    dateOfBirth: string;
+    nationality: string;
+    position: string | null;
+  };
+  team: FDTeamRef;
+  playedMatches: number;
+  goals: number;
+  assists: number | null;
+  penalties: number | null;
+}
+
+export interface FDHead2Head {
+  aggregates: {
+    numberOfMatches: number;
+    totalGoals: number;
+    homeTeam: { id: number; name: string; wins: number; draws: number; losses: number };
+    awayTeam: { id: number; name: string; wins: number; draws: number; losses: number };
+  };
+  matches: FDMatch[];
+}
+
+export interface FDMatchFilters {
+  competitions?: string;
+  ids?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  status?: string;
+  date?: string;
+}
+
+export interface FDTeamMatchFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  season?: number;
+  competitions?: string;
+  status?: string;
+  venue?: 'HOME' | 'AWAY';
+  limit?: number;
+}
+
+export interface FDPersonMatchFilters {
+  dateFrom?: string;
+  dateTo?: string;
+  status?: string;
+  competitions?: string;
+  limit?: number;
+  offset?: number;
+}
