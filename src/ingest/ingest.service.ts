@@ -6,7 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { FootballDataService } from '../providers/football-data/football-data.service.js';
-import type { FDMatch, FDStandingEntry, FDScorer, FDTeamMatchFilters } from '../providers/football-data/football-data.types.js';
+import type { FDMatch, FDStandingEntry, FDScorer, FDTeamMatchFilters, FDTeam, FDPerson, FDPersonMatchFilters, FDMatchFilters } from '../providers/football-data/football-data.types.js';
 import type { LeagueCode } from '../providers/football-data/league-codes.js';
 import type { AppConfig } from '../config/configuration.js';
 
@@ -272,9 +272,145 @@ export class IngestService implements OnModuleInit {
     return ingested;
   }
 
+  // ─── On-demand: Full team upsert (with squad + coach) ───────────────────
+
+  async upsertFullTeam(fdTeam: FDTeam) {
+    const team = await this.prisma.writer.team.upsert({
+      where: { externalId: String(fdTeam.id) },
+      create: {
+        externalId: String(fdTeam.id),
+        name: fdTeam.name,
+        shortName: fdTeam.tla,
+        logoUrl: fdTeam.crest,
+        countryCode: '',
+        founded: fdTeam.founded ?? null,
+        stadium: fdTeam.venue ?? null,
+        website: fdTeam.website ?? null,
+      },
+      update: {
+        name: fdTeam.name,
+        shortName: fdTeam.tla,
+        logoUrl: fdTeam.crest,
+        founded: fdTeam.founded ?? undefined,
+        stadium: fdTeam.venue ?? undefined,
+        website: fdTeam.website ?? undefined,
+      },
+    });
+
+    for (const member of fdTeam.squad) {
+      await this.prisma.writer.player.upsert({
+        where: { externalId: String(member.id) },
+        create: {
+          externalId: String(member.id),
+          name: member.name,
+          dateOfBirth: member.dateOfBirth ? new Date(member.dateOfBirth) : null,
+          nationality: member.nationality ?? null,
+          position: member.position ?? null,
+          jerseyNumber: member.shirtNumber ?? null,
+          photoUrl: null,
+          teamId: team.id,
+        },
+        update: {
+          name: member.name,
+          position: member.position ?? undefined,
+          jerseyNumber: member.shirtNumber ?? undefined,
+          teamId: team.id,
+        },
+      });
+    }
+
+    if (fdTeam.coach) {
+      await this.prisma.writer.player.upsert({
+        where: { externalId: String(fdTeam.coach.id) },
+        create: {
+          externalId: String(fdTeam.coach.id),
+          name: fdTeam.coach.name,
+          dateOfBirth: fdTeam.coach.dateOfBirth ? new Date(fdTeam.coach.dateOfBirth) : null,
+          nationality: fdTeam.coach.nationality ?? null,
+          position: 'COACH',
+          photoUrl: null,
+          teamId: team.id,
+        },
+        update: {
+          name: fdTeam.coach.name,
+          teamId: team.id,
+        },
+      });
+    }
+
+    return team;
+  }
+
+  // ─── On-demand: Person (player/coach) upsert ─────────────────────────────
+
+  async upsertPerson(fdPerson: FDPerson) {
+    let teamId: string | null = null;
+    if (fdPerson.currentTeam) {
+      const t = await this.prisma.reader.team.findUnique({
+        where: { externalId: String(fdPerson.currentTeam.id) },
+      });
+      teamId = t?.id ?? null;
+    }
+
+    return this.prisma.writer.player.upsert({
+      where: { externalId: String(fdPerson.id) },
+      create: {
+        externalId: String(fdPerson.id),
+        name: fdPerson.name,
+        dateOfBirth: fdPerson.dateOfBirth ? new Date(fdPerson.dateOfBirth) : null,
+        nationality: fdPerson.nationality ?? null,
+        position: fdPerson.position ?? null,
+        jerseyNumber: fdPerson.shirtNumber ?? null,
+        photoUrl: null,
+        teamId,
+      },
+      update: {
+        name: fdPerson.name,
+        nationality: fdPerson.nationality ?? undefined,
+        position: fdPerson.position ?? undefined,
+        jerseyNumber: fdPerson.shirtNumber ?? undefined,
+        teamId: teamId ?? undefined,
+      },
+    });
+  }
+
+  // ─── On-demand: Person matches ingest ────────────────────────────────────
+
+  async ingestPersonMatches(personId: number, params?: FDPersonMatchFilters): Promise<number> {
+    const matches = await this.footballData.getPersonMatches(personId, params);
+    this.logger.debug(`Ingesting ${matches.length} matches for person ${personId}`);
+    let ingested = 0;
+    for (const match of matches) {
+      try {
+        await this.upsertMatch(match);
+        ingested++;
+      } catch (err) {
+        this.logger.error(`Failed to upsert match ${match.id}`, err);
+      }
+    }
+    return ingested;
+  }
+
+  // ─── On-demand: Matches by filters ingest ────────────────────────────────
+
+  async ingestMatches(params: FDMatchFilters): Promise<number> {
+    const matches = await this.footballData.getMatches(params);
+    this.logger.debug(`Ingesting ${matches.length} matches from filters`);
+    let ingested = 0;
+    for (const match of matches) {
+      try {
+        await this.upsertMatch(match);
+        ingested++;
+      } catch (err) {
+        this.logger.error(`Failed to upsert match ${match.id}`, err);
+      }
+    }
+    return ingested;
+  }
+
   // ─── Private helpers ──────────────────────────────────────────────────────
 
-  private async upsertMatch(match: FDMatch) {
+  async upsertMatch(match: FDMatch) {
     const league = await this.upsertLeague(match);
     const season = await this.upsertSeason(league.id, match.season.startDate.slice(0, 4));
     const homeTeam = await this.upsertTeam(match.homeTeam);

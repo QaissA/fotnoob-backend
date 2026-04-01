@@ -63,6 +63,78 @@ export class IngestController {
     return { ingested, teamId };
   }
 
+  @Post('teams/:id')
+  @ApiOperation({ summary: 'Ingest a single team (with squad and coach) from football-data.org' })
+  @ApiParam({ name: 'id', description: 'football-data.org team ID', example: 57 })
+  @ApiResponse({ status: 201, schema: { example: { message: 'ok', count: 1 } } })
+  async ingestTeam(@Param('id') id: string): Promise<{ message: string; count: number }> {
+    const teamId = parseInt(id, 10);
+    if (isNaN(teamId)) throw new BadRequestException('id must be a number');
+    const fdTeam = await this.footballData.getTeam(teamId);
+    await this.ingest.upsertFullTeam(fdTeam);
+    return { message: 'ok', count: 1 };
+  }
+
+  @Post('persons/:id/matches')
+  @ApiOperation({ summary: 'Ingest matches for a person from football-data.org' })
+  @ApiParam({ name: 'id', description: 'football-data.org person ID', example: 44 })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiResponse({ status: 201, schema: { example: { message: 'ok', count: 10 } } })
+  async ingestPersonMatches(
+    @Param('id') id: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
+    @Query('limit') limit?: string,
+  ): Promise<{ message: string; count: number }> {
+    const personId = parseInt(id, 10);
+    if (isNaN(personId)) throw new BadRequestException('id must be a number');
+    const count = await this.ingest.ingestPersonMatches(personId, {
+      dateFrom,
+      dateTo,
+      status,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+    return { message: 'ok', count };
+  }
+
+  @Post('persons/:id')
+  @ApiOperation({ summary: 'Ingest a single person (player or coach) from football-data.org' })
+  @ApiParam({ name: 'id', description: 'football-data.org person ID', example: 44 })
+  @ApiResponse({ status: 201, schema: { example: { message: 'ok', count: 1 } } })
+  async ingestPerson(@Param('id') id: string): Promise<{ message: string; count: number }> {
+    const personId = parseInt(id, 10);
+    if (isNaN(personId)) throw new BadRequestException('id must be a number');
+    const fdPerson = await this.footballData.getPerson(personId);
+    await this.ingest.upsertPerson(fdPerson);
+    return { message: 'ok', count: 1 };
+  }
+
+  @Post('matches/list')
+  @ApiOperation({ summary: 'Ingest matches by filters from football-data.org' })
+  @ApiQuery({ name: 'competitions', required: false, description: 'Comma-separated competition codes' })
+  @ApiQuery({ name: 'ids', required: false, description: 'Comma-separated match IDs' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiResponse({ status: 201, schema: { example: { message: 'ok', count: 10 } } })
+  async ingestMatchesList(
+    @Query('competitions') competitions?: string,
+    @Query('ids') ids?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
+  ): Promise<{ message: string; count: number }> {
+    if (!competitions && !ids && !dateFrom && !dateTo) {
+      throw new BadRequestException('At least one filter (competitions, ids, dateFrom, dateTo) is required');
+    }
+    const count = await this.ingest.ingestMatches({ competitions, ids, dateFrom, dateTo, status });
+    return { message: 'ok', count };
+  }
+
   @Get('competitions')
   @ApiOperation({ summary: 'List all available competitions from football-data.org' })
   @ApiResponse({ status: 200, description: 'Raw list of competitions from external API' })

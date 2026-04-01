@@ -17,6 +17,8 @@ import { NewsModule } from './news/news.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { SearchModule } from './search/search.module.js';
 import { CompetitionsModule } from './competitions/competitions.module.js';
+import { TeamsModule } from './teams/teams.module.js';
+import { PersonsModule } from './persons/persons.module.js';
 
 import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard.js';
@@ -56,6 +58,8 @@ import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js
     NotificationsModule,
     SearchModule,
     CompetitionsModule,
+    TeamsModule,
+    PersonsModule,
   ],
   providers: [
     // Global exception handler

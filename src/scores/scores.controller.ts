@@ -46,6 +46,25 @@ export class ScoresController {
   }
 
   @Public()
+  @Get('matches/list')
+  @ApiOperation({ summary: 'List matches by filters — checks DB first, falls back to external API' })
+  @ApiQuery({ name: 'competitions', required: false, description: 'Comma-separated competition codes (e.g. PL,CL)' })
+  @ApiQuery({ name: 'ids', required: false, description: 'Comma-separated external match IDs' })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'status', required: false, description: 'Match status (e.g. SCHEDULED, FINISHED)' })
+  @ApiResponse({ status: 200, type: [MatchResponseDto] })
+  getMatchesList(
+    @Query('competitions') competitions?: string,
+    @Query('ids') ids?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('status') status?: string,
+  ): Promise<MatchResponseDto[]> {
+    return this.scores.getMatchesList({ competitions, ids, dateFrom, dateTo, status });
+  }
+
+  @Public()
   @Get('matches/:id')
   @ApiOperation({ summary: 'Get a single match by ID' })
   @ApiParam({ name: 'id', description: 'Internal match ID' })
@@ -64,6 +83,29 @@ export class ScoresController {
     @Param('id') id: string,
   ): Promise<MatchEventResponseDto[]> {
     return this.scores.getMatchEvents(id);
+  }
+
+  @Public()
+  @Get('matches/:id/head2head')
+  @ApiOperation({ summary: 'Get head-to-head data for the teams in a match' })
+  @ApiParam({ name: 'id', description: 'Internal match ID' })
+  @ApiQuery({ name: 'limit', required: false, example: 10 })
+  @ApiQuery({ name: 'dateFrom', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'dateTo', required: false, description: 'YYYY-MM-DD' })
+  @ApiQuery({ name: 'competitions', required: false })
+  getHead2Head(
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('competitions') competitions?: string,
+  ) {
+    return this.scores.getHead2Head(id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      dateFrom,
+      dateTo,
+      competitions,
+    });
   }
 
   @Public()

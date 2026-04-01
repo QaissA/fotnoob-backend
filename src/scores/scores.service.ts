@@ -6,11 +6,13 @@ import {
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { IngestService } from '../ingest/ingest.service.js';
+import { FootballDataService } from '../providers/football-data/football-data.service.js';
 import type {
   MatchesByLeagueDto,
   MatchResponseDto,
 } from './dto/get-matches.dto.js';
 import type { MatchEventResponseDto } from './dto/match-event.dto.js';
+import type { FDMatchFilters, FDHead2Head } from '../providers/football-data/football-data.types.js';
 import type { Prisma, MatchStatus } from '@prisma/client';
 
 type MatchWithRelations = Prisma.MatchGetPayload<{
@@ -29,6 +31,7 @@ export class ScoresService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly ingest: IngestService,
+    private readonly footballData: FootballDataService,
   ) {}
 
   async getMatchesByDate(date: string): Promise<MatchesByLeagueDto[]> {
@@ -138,6 +141,70 @@ export class ScoresService {
     }
 
     return this.groupByLeague(matches);
+  }
+
+  async getMatchesList(params: FDMatchFilters): Promise<MatchResponseDto[]> {
+    const cacheKey = `matches:list:${JSON.stringify(params)}`;
+    const cached = await this.redis.get<MatchResponseDto[]>(cacheKey);
+    if (cached) return cached;
+
+    const STATUS_MAP: Record<string, string> = {
+      SCHEDULED: 'SCHEDULED', TIMED: 'SCHEDULED',
+      IN_PLAY: 'LIVE', PAUSED: 'HALFTIME', HALFTIME: 'HALFTIME',
+      FINISHED: 'FINISHED', AWARDED: 'FINISHED',
+      POSTPONED: 'POSTPONED', SUSPENDED: 'POSTPONED',
+      CANCELLED: 'CANCELLED',
+    };
+
+    const where: Prisma.MatchWhereInput = {};
+    if (params.ids) where.externalId = { in: params.ids.split(',').map((s) => s.trim()) };
+    if (params.dateFrom) where.kickoffTime = { ...(where.kickoffTime as object), gte: new Date(params.dateFrom) };
+    if (params.dateTo) where.kickoffTime = { ...(where.kickoffTime as object), lte: new Date(params.dateTo) };
+    if (params.status) where.status = (STATUS_MAP[params.status] ?? params.status) as MatchStatus;
+    if (params.competitions) {
+      where.season = { league: { externalId: { in: params.competitions.split(',').map((s) => s.trim()) } } };
+    }
+
+    const include = {
+      homeTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+      awayTeam: { select: { id: true, name: true, shortName: true, logoUrl: true } },
+      season: { include: { league: { select: { id: true, name: true, logoUrl: true } } } },
+    } as const;
+
+    let matches = await this.prisma.writer.match.findMany({ where, include, orderBy: { kickoffTime: 'asc' } });
+
+    if (matches.length === 0) {
+      this.logger.log('No matches in DB for filters — fetching from external API');
+      try {
+        await this.ingest.ingestMatches(params);
+      } catch (err) {
+        this.logger.error('External API fetch failed for matches list', err);
+        return [];
+      }
+      matches = await this.prisma.writer.match.findMany({ where, include, orderBy: { kickoffTime: 'asc' } });
+    }
+
+    const result = matches.map((m) => this.toMatchDto(m as MatchWithRelations));
+    const hasLive = matches.some((m) => m.status === 'LIVE' || m.status === 'HALFTIME');
+    if (result.length > 0) await this.redis.set(cacheKey, result, hasLive ? 30 : 300);
+    return result;
+  }
+
+  async getHead2Head(
+    matchId: string,
+    params?: { limit?: number; dateFrom?: string; dateTo?: string; competitions?: string },
+  ): Promise<FDHead2Head> {
+    const match = await this.prisma.reader.match.findUnique({
+      where: { id: matchId },
+      select: { externalId: true },
+    });
+    if (!match) throw new NotFoundException(`Match ${matchId} not found`);
+
+    const limit = params?.limit ?? 10;
+    const cacheKey = `match:${match.externalId}:h2h:${limit}`;
+    return this.redis.cachedFetch(cacheKey, 3600, () =>
+      this.footballData.getHead2Head(parseInt(match.externalId, 10), params),
+    );
   }
 
   async invalidateMatchCache(matchId: string, date: string): Promise<void> {

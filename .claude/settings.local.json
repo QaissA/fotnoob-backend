@@ -11,7 +11,10 @@
       "Bash(pnpm build:*)",
       "Bash(find /c/dev/backend/fotNob/src -type f -name *scores* -o -name *match*)",
       "Bash(grep -r scores/match /c/dev/backend/fotNob/src --include=*.ts)",
-      "Bash(find C:devbackendfotNob -name *.prisma -type f)"
+      "Bash(find C:devbackendfotNob -name *.prisma -type f)",
+      "Bash(npm run:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose logs:*)"
     ]
   }
 }
