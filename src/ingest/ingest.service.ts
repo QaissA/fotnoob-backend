@@ -1,12 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, Interval } from '@nestjs/schedule';
 import type { MatchStatus } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 
 import { PrismaService } from '../prisma/prisma.service.js';
 import { RedisService } from '../redis/redis.service.js';
 import { FootballDataService } from '../providers/football-data/football-data.service.js';
 import type { FDMatch, FDStandingEntry, FDScorer, FDTeamMatchFilters } from '../providers/football-data/football-data.types.js';
 import type { LeagueCode } from '../providers/football-data/league-codes.js';
+import type { AppConfig } from '../config/configuration.js';
 
 const STATUS_MAP: Record<string, MatchStatus> = {
   SCHEDULED:  'SCHEDULED',
@@ -22,19 +24,32 @@ const STATUS_MAP: Record<string, MatchStatus> = {
 };
 
 @Injectable()
-export class IngestService {
+export class IngestService implements OnModuleInit {
   private readonly logger = new Logger(IngestService.name);
+  private schedulingEnabled = true;
 
   constructor(
     private readonly footballData: FootballDataService,
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    private readonly config: ConfigService<AppConfig>,
   ) {}
+
+  onModuleInit(): void {
+    const apiKey = this.config.get('FOOTBALL_DATA_API_KEY', { infer: true });
+    if (!apiKey || apiKey === 'placeholder') {
+      this.schedulingEnabled = false;
+      this.logger.warn(
+        'FOOTBALL_DATA_API_KEY is not set — scheduled ingest jobs are disabled. Set a real key to enable them.',
+      );
+    }
+  }
 
   // ─── Job A: Daily fixture sync (3 AM every day) ──────────────────────────
 
   @Cron('0 3 * * *')
   async syncFixturesByDate(): Promise<void> {
+    if (!this.schedulingEnabled) return;
     const today = new Date().toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
     this.logger.log(`Syncing fixtures for ${today} and ${tomorrow}`);
@@ -60,6 +75,7 @@ export class IngestService {
 
   @Interval(60_000)
   async syncLiveMatches(): Promise<void> {
+    if (!this.schedulingEnabled) return;
     const liveMatches = await this.footballData.getLiveMatches();
     if (!liveMatches.length) return;
 
@@ -88,6 +104,7 @@ export class IngestService {
 
   @Cron('0 4 * * *')
   async syncStandings(): Promise<void> {
+    if (!this.schedulingEnabled) return;
     const activeLeagues = await this.prisma.reader.league.findMany({
       where: { isActive: true },
       include: { seasons: { where: { isCurrent: true } } },
@@ -114,6 +131,7 @@ export class IngestService {
 
   @Cron('0 2 * * 0')
   async syncCompetitions(): Promise<void> {
+    if (!this.schedulingEnabled) return;
     this.logger.log('Syncing competition metadata');
     const competitions = await this.footballData.getCompetitions();
 
@@ -146,6 +164,7 @@ export class IngestService {
 
   @Cron('0 5 * * *')
   async syncTopScorers(): Promise<void> {
+    if (!this.schedulingEnabled) return;
     const activeLeagues = await this.prisma.reader.league.findMany({
       where: { isActive: true },
       include: { seasons: { where: { isCurrent: true } } },
@@ -169,6 +188,71 @@ export class IngestService {
         this.logger.error(`Failed to sync top scorers for league ${league.id}`, err);
       }
     }
+  }
+
+  // ─── On-demand: Standings for one competition ────────────────────────────
+
+  async ingestStandingsForCompetition(
+    code: string,
+    params?: { matchday?: number; season?: number; date?: string },
+  ): Promise<void> {
+    let league = await this.prisma.reader.league.findUnique({ where: { externalId: code } });
+    if (!league) {
+      await this.ingestCompetition(code);
+      league = await this.prisma.reader.league.findUnique({ where: { externalId: code } });
+      if (!league) throw new Error(`League ${code} not found after ingestion`);
+    }
+
+    const seasonName = params?.season ? String(params.season) : new Date().getFullYear().toString();
+    const season = await this.upsertSeason(league.id, seasonName);
+
+    const table = await this.footballData.getStandings(code as LeagueCode, params);
+    this.logger.debug(`Got ${table.length} standing entries for ${code}`);
+    for (const entry of table) {
+      await this.upsertStanding(entry, season.id).catch((err) =>
+        this.logger.error(`Failed to upsert standing for team ${entry.team.id}`, err),
+      );
+    }
+  }
+
+  // ─── On-demand: Matches for one competition ───────────────────────────────
+
+  async ingestCompetitionMatches(
+    code: string,
+    params?: { matchday?: number; status?: string; dateFrom?: string; dateTo?: string },
+  ): Promise<void> {
+    const matches = await this.footballData.getCompetitionMatches(code as LeagueCode, params);
+    this.logger.debug(`Ingesting ${matches.length} matches for competition ${code}`);
+    for (const match of matches) {
+      try {
+        await this.upsertMatch(match);
+      } catch (err) {
+        this.logger.error(`Failed to upsert match ${match.id}`, err);
+      }
+    }
+  }
+
+  // ─── On-demand: Single competition ingest ────────────────────────────────
+
+  async ingestCompetition(code: string): Promise<{ externalId: string; name: string; country: string; logoUrl: string | null }> {
+    const detail = await this.footballData.getCompetition(code as LeagueCode);
+    const league = await this.prisma.writer.league.upsert({
+      where: { externalId: code },
+      create: {
+        externalId: code,
+        name: detail.name,
+        shortName: detail.name,
+        country: detail.area.name,
+        logoUrl: detail.emblem ?? null,
+      },
+      update: {
+        name: detail.name,
+        country: detail.area.name,
+        logoUrl: detail.emblem ?? null,
+      },
+    });
+    this.logger.debug(`Ingested competition ${code}`);
+    return { externalId: league.externalId, name: league.name, country: league.country, logoUrl: league.logoUrl };
   }
 
   // ─── On-demand: Team matches backfill ────────────────────────────────────

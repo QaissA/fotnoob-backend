@@ -8,7 +8,10 @@
       "Bash(pnpm tsc:*)",
       "Bash(docker exec:*)",
       "Bash(pnpm add:*)",
-      "Bash(pnpm build:*)"
+      "Bash(pnpm build:*)",
+      "Bash(find /c/dev/backend/fotNob/src -type f -name *scores* -o -name *match*)",
+      "Bash(grep -r scores/match /c/dev/backend/fotNob/src --include=*.ts)",
+      "Bash(find C:devbackendfotNob -name *.prisma -type f)"
     ]
   }
 }

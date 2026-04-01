@@ -4,6 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: builder
     container_name: fotnob-api
     ports:
       - '3000:3000'
@@ -28,7 +29,7 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
-    command: pnpm start:dev
+    command: sh -c "npx prisma migrate deploy && pnpm start:dev"
     restart: unless-stopped
 
   # ─── PostgreSQL ───────────────────────────────────────────────────────────

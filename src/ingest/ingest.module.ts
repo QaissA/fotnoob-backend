@@ -7,5 +7,6 @@ import { ProvidersModule } from '../providers/providers.module.js';
   imports: [ProvidersModule],
   providers: [IngestService],
   controllers: [IngestController],
+  exports: [IngestService],
 })
 export class IngestModule {}

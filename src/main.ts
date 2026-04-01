@@ -1,3 +1,5 @@
+import { Logger } from '@nestjs/common';
+import type { LogLevel } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   FastifyAdapter,
@@ -9,9 +11,15 @@ import { AppModule } from './app.module.js';
 import type { AppConfig } from './config/configuration.js';
 
 async function bootstrap(): Promise<void> {
+  const isDev = process.env.NODE_ENV !== 'production';
+  const nestLogLevels: LogLevel[] = isDev
+    ? ['log', 'debug', 'verbose', 'warn', 'error', 'fatal']
+    : ['log', 'warn', 'error', 'fatal'];
+
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: true }),
+    new FastifyAdapter({ logger: { level: isDev ? 'debug' : 'info' } }),
+    { logger: nestLogLevels },
   );
 
   const config = app.get(ConfigService<AppConfig>);
@@ -48,8 +56,9 @@ async function bootstrap(): Promise<void> {
   });
 
   await app.listen(port, '0.0.0.0');
-  console.log(`FotNob API running on http://0.0.0.0:${port}/api/v1`);
-  console.log(`Swagger docs at  http://0.0.0.0:${port}/api/docs`);
+  const logger = new Logger('Bootstrap');
+  logger.log(`FotNob API running on http://0.0.0.0:${port}/api/v1`);
+  logger.log(`Swagger docs at  http://0.0.0.0:${port}/api/docs`);
 }
 
 bootstrap();

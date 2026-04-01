@@ -76,9 +76,13 @@ export class FootballDataService {
     return data.matches;
   }
 
-  async getStandings(leagueCode: LeagueCode): Promise<FDStandingEntry[]> {
+  async getStandings(
+    leagueCode: LeagueCode,
+    params?: { matchday?: number; season?: number; date?: string },
+  ): Promise<FDStandingEntry[]> {
     const { data } = await this.http.get<FDCompetitionStandings>(
       `/competitions/${leagueCode}/standings`,
+      { params },
     );
     const total = data.standings.find((s) => s.type === 'TOTAL');
     return total?.table ?? [];

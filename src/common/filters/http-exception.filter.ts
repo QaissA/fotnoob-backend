@@ -55,6 +55,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
         `${request.method} ${request.url} → ${status}`,
         exception instanceof Error ? exception.stack : String(exception),
       );
+    } else if (status >= 400) {
+      this.logger.warn(`${request.method} ${request.url} → ${status}: ${String(message)}`);
     }
 
     void reply.status(status).send(body);
